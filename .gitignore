@@ -47,6 +47,7 @@ cache
 doc/
 /.history/
 /downloads/
+/download/
 /output/
 
 # local config

@@ -32,7 +32,7 @@ if project_root not in sys.path:
 from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config as load_config_from_file
 from zsxq_database import ZSXQDatabase
 from zsxq_file_database import ZSXQFileDatabase
-from db_path_manager import get_db_path_manager
+from db_path_manager import get_db_path_manager, mirror_file_to_root_downloads
 from image_cache_manager import get_image_cache_manager
 from accounts_manager import (
     get_accounts as am_get_accounts,
@@ -4859,6 +4859,13 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
         existing_size = os.path.getsize(local_path)
         if existing_size == file_size or (file_size == 0 and existing_size > 0):
             db.update_file_download_status(file_id, 'completed', local_path)
+            try:
+                mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                if mirror_path and task_id:
+                    add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+            except Exception as mirror_err:
+                if task_id:
+                    add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
             if task_id:
                 add_task_log(task_id, f"         ⏭️ 文件已存在，跳过下载 ({existing_size/(1024*1024):.2f}MB)")
             return "skipped"
@@ -4928,8 +4935,15 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
                     for chunk in file_resp.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
-                
+
                 db.update_file_download_status(file_id, 'completed', local_path)
+                try:
+                    mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                    if mirror_path and task_id:
+                        add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+                except Exception as mirror_err:
+                    if task_id:
+                        add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
                 return "downloaded"
             else:
                 last_error = f"HTTP {file_resp.status_code}"
@@ -4977,6 +4991,13 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
         existing_size = os.path.getsize(local_path)
         if existing_size > 0:
             db.update_video_download_status(video_id, 'completed', '', local_path)
+            try:
+                mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                if mirror_path and task_id:
+                    add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+            except Exception as mirror_err:
+                if task_id:
+                    add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
             if task_id:
                 add_task_log(task_id, f"         ⏭️ 视频已存在，跳过下载 ({existing_size/(1024*1024):.1f}MB)")
             return "skipped"
@@ -5168,6 +5189,13 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
             db.update_video_download_status(video_id, 'completed', m3u8_url, local_path)
             final_size = os.path.getsize(local_path)
             log_info(f"视频下载成功: video_id={video_id}, path={local_path}, size={final_size}")
+            try:
+                mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                if mirror_path and task_id:
+                    add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+            except Exception as mirror_err:
+                if task_id:
+                    add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
             if task_id:
                 add_task_log(task_id, f"         ✅ 视频下载完成 ({final_size/(1024*1024):.1f}MB)")
             return "downloaded"

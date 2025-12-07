@@ -16,6 +16,7 @@ from typing import Dict, Optional, Any
 
 import requests
 
+from db_path_manager import mirror_file_to_root_downloads
 from zsxq_file_database import ZSXQFileDatabase
 
 
@@ -524,7 +525,7 @@ class ZSXQFileDownloader:
         
         print(f"   🚫 已重试{max_retries}次，全部失败")
         return None
-    
+
     def download_file(self, file_info: Dict[str, Any]) -> bool:
         """下载单个文件"""
         file_data = file_info.get('file', {})
@@ -554,6 +555,12 @@ class ZSXQFileDownloader:
         if os.path.exists(file_path):
             existing_size = os.path.getsize(file_path)
             if existing_size == file_size:
+                try:
+                    mirrored_path = mirror_file_to_root_downloads(file_path, safe_filename)
+                    if mirrored_path:
+                        self.log(f"   📂 已同步到根目录: {mirrored_path}")
+                except Exception as mirror_err:
+                    self.log(f"   ⚠️ 同步到根目录失败: {mirror_err}")
                 self.log(f"   ✅ 文件已存在且大小匹配，跳过下载")
                 return "skipped"  # 返回特殊值表示跳过
             else:
@@ -619,6 +626,13 @@ class ZSXQFileDownloader:
 
                 self.log(f"   ✅ 下载完成: {safe_filename}")
                 self.log(f"   💾 保存路径: {file_path}")
+
+                try:
+                    mirrored_path = mirror_file_to_root_downloads(file_path, safe_filename)
+                    if mirrored_path:
+                        self.log(f"   📂 已同步到根目录: {mirrored_path}")
+                except Exception as mirror_err:
+                    self.log(f"   ⚠️ 同步到根目录失败: {mirror_err}")
 
                 self.download_count += 1
                 self.current_batch_count += 1
