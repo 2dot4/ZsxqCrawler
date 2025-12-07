@@ -88,6 +88,19 @@ uv sync
 
 #### 方式一：Web界面（推荐）
 
+##### 使用 conda 环境一键启动（无需 uv）
+
+```bash
+# 已通过 environment.yml 创建好 conda 环境后，直接运行：
+bash start_web_conda.sh                # 默认使用 craw4jiucai 环境
+# 或指定其他环境名
+bash start_web_conda.sh my_env_name
+```
+
+脚本会同时启动后端（`conda run -n <env> python main.py --port 8208`）与前端（`npm run dev`，端口 3060），按下 `Ctrl+C` 即可同时停止两端服务。
+
+##### 使用 uv/其他方式
+
 ```bash
 # 1. 启动后端API服务
 uv run main.py
