@@ -6,7 +6,7 @@
 import os
 import sys
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 from contextlib import asynccontextmanager
 import json
@@ -408,6 +408,164 @@ def broadcast_log(task_id: str, log_message: str):
     """广播日志到SSE连接"""
     # 这个函数现在主要用于存储日志，实际的SSE广播在stream端点中实现
     pass
+
+
+def export_group_markdown(
+    group_id: str,
+    db: Optional[ZSXQDatabase] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+) -> Optional[str]:
+    """根据数据库内容生成当前群组的话题 Markdown 归档文件。
+
+    Args:
+        group_id: 群组ID。
+        db: 可选的现有数据库实例；未提供时会自行打开并在结束后关闭。
+        log_callback: 可选的日志回调，用于任务日志输出。
+
+    Returns:
+        生成的 Markdown 文件相对路径（相对于项目根目录），失败时返回 None。
+    """
+
+    def _log(message: str):
+        if log_callback:
+            log_callback(message)
+
+    local_db = db
+    close_after = False
+
+    try:
+        path_manager = get_db_path_manager()
+        doc_dir = os.path.join(project_root, "doc")
+        os.makedirs(doc_dir, exist_ok=True)
+
+        if local_db is None:
+            db_path = path_manager.get_topics_db_path(group_id)
+            if not os.path.exists(db_path):
+                _log(f"⚠️ 未找到群组 {group_id} 的数据库，跳过生成 Markdown")
+                return None
+            local_db = ZSXQDatabase(db_path)
+            close_after = True
+
+        cursor = local_db.cursor
+        cursor.execute(
+            "SELECT name FROM groups WHERE group_id = ? LIMIT 1",
+            (group_id,),
+        )
+        group_row = cursor.fetchone()
+        group_name = (group_row[0] if group_row else None) or f"群组 {group_id}"
+
+        cursor.execute(
+            """
+            SELECT
+                t.topic_id,
+                t.title,
+                t.type,
+                t.create_time,
+                t.likes_count,
+                t.comments_count,
+                t.reading_count,
+                tk.text AS talk_text,
+                u.name AS author_name,
+                u.alias AS author_alias,
+                art.title AS article_title,
+                art.article_url AS article_url,
+                q.text AS question_text,
+                a.text AS answer_text
+            FROM topics t
+            LEFT JOIN talks tk ON t.topic_id = tk.topic_id
+            LEFT JOIN users u ON tk.owner_user_id = u.user_id
+            LEFT JOIN articles art ON t.topic_id = art.topic_id
+            LEFT JOIN questions q ON t.topic_id = q.topic_id
+            LEFT JOIN answers a ON t.topic_id = a.topic_id
+            WHERE t.group_id = ?
+            ORDER BY t.create_time DESC
+            """,
+            (group_id,),
+        )
+
+        rows = cursor.fetchall()
+        if not rows:
+            _log(f"⚠️ 群组 {group_id} 暂无话题数据，未生成 Markdown")
+            return None
+
+        timestamp_label = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp_label}.md"
+        filepath = os.path.join(doc_dir, filename)
+
+        lines = [
+            f"# {group_name} 文章归档", "",
+            f"- 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"- 群组 ID: {group_id}",
+            f"- 话题总数: {len(rows)}",
+            "",
+        ]
+
+        for idx, topic in enumerate(rows, start=1):
+            (
+                topic_id,
+                title,
+                topic_type,
+                create_time,
+                likes_count,
+                comments_count,
+                reading_count,
+                talk_text,
+                author_name,
+                author_alias,
+                article_title,
+                article_url,
+                question_text,
+                answer_text,
+            ) = topic
+
+            display_title = title or article_title or f"话题 {topic_id}"
+            author_display = author_alias or author_name or ""
+
+            lines.append(f"## {idx}. {display_title}")
+            meta_parts = [
+                f"ID: {topic_id}",
+                f"类型: {topic_type or 'unknown'}",
+                f"创建时间: {create_time or '未知'}",
+            ]
+            if author_display:
+                meta_parts.append(f"作者: {author_display}")
+            meta_parts.append(
+                f"互动: 👍 {likes_count or 0} · 💬 {comments_count or 0} · 👀 {reading_count or 0}"
+            )
+            lines.append("; ".join(meta_parts))
+
+            if article_url:
+                lines.append(f"[文章链接]({article_url})")
+
+            content_blocks: List[str] = []
+            if talk_text and talk_text.strip():
+                content_blocks.append(talk_text.strip())
+            if question_text and question_text.strip():
+                content_blocks.append(f"**提问：** {question_text.strip()}")
+            if answer_text and answer_text.strip():
+                content_blocks.append(f"**回答：** {answer_text.strip()}")
+
+            if not content_blocks:
+                content_blocks.append("_暂无正文_")
+
+            lines.append("\n\n".join(content_blocks))
+            lines.append("")  # 空行分隔
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        relative_path = os.path.relpath(filepath, project_root)
+        _log(f"📝 已生成 Markdown 归档: {relative_path}")
+        return relative_path
+    except Exception as e:
+        _log(f"⚠️ 生成 Markdown 失败: {e}")
+        return None
+    finally:
+        if close_after and local_db:
+            try:
+                local_db.close()
+            except Exception:
+                pass
 
 def build_stealth_headers(cookie: str) -> Dict[str, str]:
     """构造更接近官网的请求头，提升成功率"""
@@ -1035,6 +1193,11 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
             update_task(task_id, "failed", "会员已过期", {"expired": True, "code": result.get('code'), "message": result.get('message')})
             return
 
+        markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+        if markdown_path:
+            result = result or {}
+            result["markdown_path"] = markdown_path
+
         add_task_log(task_id, f"✅ 获取完成！新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}")
         update_task(task_id, "completed", "历史数据爬取完成", result)
     except Exception as e:
@@ -1617,6 +1780,11 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                     update_task(task_id, "failed", "会员已过期", {"expired": True, "code": result.get('code'), "message": result.get('message')})
                     return
 
+                markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+                if markdown_path:
+                    result = result or {}
+                    result["markdown_path"] = markdown_path
+
                 add_task_log(task_id, f"🎉 全量爬取完成！")
                 add_task_log(task_id, f"📊 最终统计: 新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}, 总页数: {result.get('pages', 0)}")
                 update_task(task_id, "completed", "全量爬取完成", result)
@@ -1691,6 +1859,11 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 # 检查任务是否被停止
                 if is_task_stopped(task_id):
                     return
+
+                markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+                if markdown_path:
+                    result = result or {}
+                    result["markdown_path"] = markdown_path
 
                 add_task_log(task_id, f"✅ 增量爬取完成！新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}")
                 update_task(task_id, "completed", "增量爬取完成", result)
@@ -1772,6 +1945,11 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                     add_task_log(task_id, f"❌ 会员已过期: {result.get('message', '成员体验已到期')}")
                     update_task(task_id, "failed", "会员已过期", {"expired": True, "code": result.get('code'), "message": result.get('message')})
                     return
+
+                markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+                if markdown_path:
+                    result = result or {}
+                    result["markdown_path"] = markdown_path
 
                 add_task_log(task_id, f"✅ 获取最新记录完成！新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}")
                 update_task(task_id, "completed", "获取最新记录完成", result)
@@ -3956,6 +4134,10 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
             # 结束条件：没有下一页时间或已越过起始边界
             if not end_time_param or (last_time_dt_in_page and last_time_dt_in_page < start_dt):
                 break
+
+        markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+        if markdown_path:
+            total_stats["markdown_path"] = markdown_path
 
         update_task(task_id, "completed", "时间区间爬取完成", total_stats)
     except Exception as e:

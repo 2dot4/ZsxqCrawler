@@ -132,15 +132,14 @@ uv run zsxq_interactive_crawler.py
 
 - **话题 / 文章内容数据库**: `output/databases/{group_id}/zsxq_topics_{group_id}.db`  
   - 保存所有话题、文章正文、评论等结构化数据（Web 界面展示内容都来自这里）。
-- **文件列表数据库**: `output/databases/{group_id}/zsxq_files_{group_id}.db`  
+- **文件列表数据库**: `output/databases/{group_id}/zsxq_files_{group_id}.db`
   - 保存文件元数据（文件名、大小、下载次数等），用于文件面板和下载任务管理。
-- **已下载附件 / 文件**: `output/databases/{group_id}/downloads/`  
-  - 通过 Web 界面或命令行触发的文件下载，实际都会保存在这里。  
+- **已下载附件 / 文件**: `output/databases/{group_id}/downloads/`
+  - 通过 Web 界面或命令行触发的文件下载，实际都会保存在这里。
   - 例如当前示例配置中，群组 `88851415151812` 的文件路径为：`output/databases/88851415151812/downloads/`。
-- **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`  
+- **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`
   - 用于话题图片预览的本地缓存，如被删除，后续访问时会自动重新生成。
-
-> 提示：当前版本不会将文章导出为 Markdown/HTML 文件，**文章内容都存储在话题数据库中**；若需要再导出为文件，可以后续通过数据库二次处理实现。
+- **Markdown 归档**: 每次爬取任务完成后，会在项目根目录 `doc/` 下生成以日期时间命名的 Markdown 汇总文件（示例：`20250101_153045.md`），包含该群组的话题正文，便于离线浏览。
 
 ## 贡献指南
 
