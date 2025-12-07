@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -17,6 +18,7 @@ interface ConfigPanelProps {
 export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
   const [loading, setLoading] = useState(false);
   const [cookie, setCookie] = useState('');
+  const [userAgent, setUserAgent] = useState('');
   const [showInstructions, setShowInstructions] = useState(false);
 
   const handleSaveConfig = async () => {
@@ -29,8 +31,9 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
       setLoading(true);
       const response = await apiClient.updateConfig({
         cookie: cookie.trim(),
+        user_agent: userAgent.trim() || undefined,
       });
-      
+
       toast.success('配置保存成功！');
       onConfigSaved();
     } catch (error) {
@@ -74,6 +77,19 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
                 />
                 <p className="text-xs text-muted-foreground">
                   从浏览器开发者工具的Network标签中复制完整的Cookie值
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="user-agent">全局 User-Agent（可选）</Label>
+                <Input
+                  id="user-agent"
+                  placeholder="不填写则使用内置的随机浏览器UA池"
+                  value={userAgent}
+                  onChange={(e) => setUserAgent(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  若希望所有请求使用固定的浏览器标识，可在此填写自定义 User-Agent
                 </p>
               </div>
 

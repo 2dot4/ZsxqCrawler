@@ -21,6 +21,8 @@ import mimetypes
 import random
 import time
 
+from user_agent_config import get_configured_user_agent
+
 # 添加项目根目录到Python路径（现在main.py就在根目录）
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
@@ -49,6 +51,9 @@ from logger_config import log_info, log_warning, log_error, log_exception, log_d
 
 # 初始化日志系统
 ensure_configured()
+
+# 预先读取全局 User-Agent（如果已配置）
+CONFIGURED_USER_AGENT = get_configured_user_agent()
 
 
 @asynccontextmanager
@@ -199,6 +204,9 @@ def get_cached_local_group_ids(force_refresh: bool = False) -> set:
 # Pydantic模型定义
 class ConfigModel(BaseModel):
     cookie: str = Field(..., description="知识星球Cookie")
+    user_agent: Optional[str] = Field(
+        default=None, description="可选的全局 User-Agent（为空则使用随机池）"
+    )
 
 class CrawlHistoricalRequest(BaseModel):
     pages: int = Field(default=10, ge=1, le=1000, description="爬取页数")
@@ -285,7 +293,13 @@ def get_crawler(log_callback=None) -> ZSXQInteractiveCrawler:
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler_instance = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler_instance = ZSXQInteractiveCrawler(
+            cookie,
+            group_id,
+            db_path,
+            log_callback,
+            default_user_agent=CONFIGURED_USER_AGENT,
+        )
 
     return crawler_instance
 
@@ -305,7 +319,13 @@ def get_crawler_for_group(group_id: str, log_callback=None) -> ZSXQInteractiveCr
     path_manager = get_db_path_manager()
     db_path = path_manager.get_topics_db_path(group_id)
 
-    return ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+    return ZSXQInteractiveCrawler(
+        cookie,
+        group_id,
+        db_path,
+        log_callback,
+        default_user_agent=CONFIGURED_USER_AGENT,
+    )
 
 def get_crawler_safe() -> Optional[ZSXQInteractiveCrawler]:
     """安全获取爬虫实例，配置未设置时返回None"""
@@ -399,6 +419,8 @@ def build_stealth_headers(cookie: str) -> Dict[str, str]:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     ]
+    selected_ua = CONFIGURED_USER_AGENT or random.choice(user_agents)
+
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -415,7 +437,7 @@ def build_stealth_headers(cookie: str) -> Dict[str, str]:
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "User-Agent": random.choice(user_agents),
+        "User-Agent": selected_ua,
         "X-Aduid": "a3be07cd6-dd67-3912-0093-862d844e7fe",
         "X-Request-Id": f"dcc5cb6ab-1bc3-8273-cc26-{random.randint(100000000000, 999999999999)}",
         "X-Signature": "733fd672ddf6d4e367730d9622cdd1e28a4b6203",
@@ -507,6 +529,9 @@ async def get_config():
 async def update_config(config: ConfigModel):
     """更新配置"""
     try:
+        user_agent = (config.user_agent or "").strip()
+        sanitized_ua = user_agent.replace("\"", "\\\"") if user_agent else ""
+
         # 创建配置内容
         config_content = f"""# 知识星球数据采集器配置文件
 # 通过Web界面自动生成
@@ -520,6 +545,9 @@ cookie = "{config.cookie}"
 dir = "downloads"
 """
 
+        if sanitized_ua:
+            config_content += f"\n\n[network]\n# 全局默认 User-Agent（为空则使用内置随机池）\nuser_agent = \"{sanitized_ua}\""
+
         # 保存配置文件
         config_path = "config.toml"
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -528,6 +556,10 @@ dir = "downloads"
         # 重置爬虫实例，强制重新加载配置
         global crawler_instance
         crawler_instance = None
+
+        # 刷新全局 User-Agent 配置
+        global CONFIGURED_USER_AGENT
+        CONFIGURED_USER_AGENT = get_configured_user_agent()
 
         return {"message": "配置更新成功", "success": True}
     except Exception as e:
@@ -959,7 +991,13 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler = ZSXQInteractiveCrawler(
+            cookie,
+            group_id,
+            db_path,
+            log_callback,
+            default_user_agent=CONFIGURED_USER_AGENT,
+        )
         # 设置停止检查函数
         crawler.stop_check_func = stop_check
 
@@ -1526,7 +1564,13 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(
+                    cookie,
+                    group_id,
+                    db_path,
+                    log_callback,
+                    default_user_agent=CONFIGURED_USER_AGENT,
+                )
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1614,7 +1658,13 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(
+                    cookie,
+                    group_id,
+                    db_path,
+                    log_callback,
+                    default_user_agent=CONFIGURED_USER_AGENT,
+                )
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1683,7 +1733,13 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(
+                    cookie,
+                    group_id,
+                    db_path,
+                    log_callback,
+                    default_user_agent=CONFIGURED_USER_AGENT,
+                )
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -3780,7 +3836,13 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler = ZSXQInteractiveCrawler(
+            cookie,
+            group_id,
+            db_path,
+            log_callback,
+            default_user_agent=CONFIGURED_USER_AGENT,
+        )
         crawler.stop_check_func = stop_check
 
         # 可选：应用自定义间隔设置

@@ -13,6 +13,7 @@ from zsxq_database import ZSXQDatabase
 from zsxq_file_downloader import ZSXQFileDownloader
 from db_path_manager import get_db_path_manager
 import os
+from user_agent_config import get_configured_user_agent
 try:
     import tomllib
 except ImportError:
@@ -27,7 +28,8 @@ except ImportError:
 class ZSXQInteractiveCrawler:
     """知识星球交互式数据采集器"""
     
-    def __init__(self, cookie: str, group_id: str, db_path: str = None, log_callback=None):
+    def __init__(self, cookie: str, group_id: str, db_path: str = None, log_callback=None,
+                 default_user_agent: Optional[str] = None):
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
         self.log_callback = log_callback  # 日志回调函数
@@ -45,6 +47,9 @@ class ZSXQInteractiveCrawler:
 
         # 文件下载器（懒加载）
         self.file_downloader = None
+
+        # 默认 User-Agent（可通过配置/环境变量覆盖）
+        self.default_user_agent = default_user_agent or get_configured_user_agent()
 
         # 基础API配置
         self.base_url = "https://api.zsxq.com"
@@ -182,7 +187,12 @@ class ZSXQInteractiveCrawler:
             # 使用路径管理器获取文件数据库路径
             path_manager = get_db_path_manager()
             files_db_path = path_manager.get_files_db_path(self.group_id)
-            self.file_downloader = ZSXQFileDownloader(self.cookie, self.group_id, files_db_path)
+            self.file_downloader = ZSXQFileDownloader(
+                self.cookie,
+                self.group_id,
+                files_db_path,
+                default_user_agent=self.default_user_agent,
+            )
         return self.file_downloader
     
     def show_database_status(self):
@@ -215,6 +225,8 @@ class ZSXQInteractiveCrawler:
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         ]
         
+        selected_ua = self.default_user_agent or random.choice(user_agents)
+
         # 基础头部
         headers = {
             "Accept": "application/json, text/plain, */*",
@@ -232,7 +244,7 @@ class ZSXQInteractiveCrawler:
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
-            "User-Agent": random.choice(user_agents),
+            "User-Agent": selected_ua,
             "X-Aduid": "a3be07cd6-dd67-3912-0093-862d844e7fe",
             "X-Request-Id": f"dcc5cb6ab-1bc3-8273-cc26-{random.randint(100000000000, 999999999999)}",
             "X-Signature": "733fd672ddf6d4e367730d9622cdd1e28a4b6203",
@@ -1676,7 +1688,8 @@ def main():
         return
     
     # 创建交互式爬虫
-    crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH)
+    default_ua = get_configured_user_agent(config)
+    crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH, default_user_agent=default_ua)
     
     # 运行交互界面
     crawler.run_interactive()
