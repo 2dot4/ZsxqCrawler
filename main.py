@@ -29,7 +29,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # 导入现有的业务逻辑模块
-from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config
+from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config as load_config_from_file
 from zsxq_database import ZSXQDatabase
 from zsxq_file_database import ZSXQFileDatabase
 from db_path_manager import get_db_path_manager
@@ -52,8 +52,24 @@ from logger_config import log_info, log_warning, log_error, log_exception, log_d
 # 初始化日志系统
 ensure_configured()
 
-# 预先读取全局 User-Agent（如果已配置）
-CONFIGURED_USER_AGENT = get_configured_user_agent()
+# 配置缓存，启动时即刻加载 config.toml，便于重启后恢复状态
+CONFIG_CACHE: Optional[dict] = None
+CONFIGURED_USER_AGENT: Optional[str] = None
+
+
+def load_config(refresh: bool = False) -> Optional[dict]:
+    """包装原始配置加载逻辑，支持缓存与刷新。"""
+
+    global CONFIG_CACHE, CONFIGURED_USER_AGENT
+
+    if refresh or CONFIG_CACHE is None:
+        CONFIG_CACHE = load_config_from_file()
+        CONFIGURED_USER_AGENT = get_configured_user_agent(CONFIG_CACHE)
+    return CONFIG_CACHE
+
+
+# 启动时尝试加载配置，确保重启后立即可用
+load_config(refresh=True)
 
 
 @asynccontextmanager
@@ -715,9 +731,8 @@ dir = "downloads"
         global crawler_instance
         crawler_instance = None
 
-        # 刷新全局 User-Agent 配置
-        global CONFIGURED_USER_AGENT
-        CONFIGURED_USER_AGENT = get_configured_user_agent()
+        # 刷新全局配置缓存与 User-Agent 配置
+        load_config(refresh=True)
 
         return {"message": "配置更新成功", "success": True}
     except Exception as e:
