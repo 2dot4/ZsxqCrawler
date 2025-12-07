@@ -43,6 +43,20 @@
 
 ### 1. 安装部署
 
+#### 方式A：使用 conda（Python 3.10，环境名 `craw4jiucai`）
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/2977094657/ZsxqCrawler.git
+cd ZsxqCrawler
+
+# 2. 创建并激活环境
+conda env create -f environment.yml
+conda activate craw4jiucai
+```
+
+#### 方式B：使用 uv/其他环境管理器
+
 ```bash
 # 1. 克隆项目
 git clone https://github.com/2977094657/ZsxqCrawler.git
