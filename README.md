@@ -10,10 +10,11 @@
 
 ## 项目特性
 
-- **智能采集**: 支持全量、增量、智能更新等多种采集模式
-- **文件管理**: 自动下载和管理知识星球中的文件资源，支持直接下载
-- **命令行界面**: 提供交互式命令行工具
-- **Web 界面**: 现代化的 React 前端界面，操作直观
+- **CLI-first**: 新增 `zsxq-md` 命令，面向 Markdown + 附件产物导出
+- **SQLite-only**: 使用 `output/state.db` 保存最小同步状态与运行记录
+- **双层增量**: 列表游标使用 `attached_to_column_time + topic_id`，内容变更使用 `modified_at + content_checksum`
+- **稳定路径**: 文章固定输出到 `output/articles/YYYY/MM/{topic_id}.md`，附件输出到 `output/attachments/{topic_id}/`
+- **Legacy Web**: 现有 Web/平台能力保留为 legacy，不影响新 CLI 路线
 
 ## 界面展示
 
@@ -72,7 +73,31 @@ uv sync
 
 ### 3. 运行应用
 
-#### 方式一：Web界面（推荐）
+#### 方式一：CLI Markdown 模式（V2 推荐）
+
+```bash
+# 按 config.toml 执行增量同步
+uv run zsxq-md crawl --column-id 123 --incremental
+
+# 全量同步
+uv run zsxq-md crawl --column-id 123 --full
+
+# 重建 markdown（render_version 升级后）
+uv run zsxq-md rebuild-markdown --render-version v2
+```
+
+输出结构：
+
+```text
+output/
+├─ articles/
+├─ attachments/
+├─ raw/
+├─ state.db
+└─ run_summary.json
+```
+
+#### 方式二：Web 界面（legacy）
 
 ```bash
 # 1. 启动后端API服务
@@ -87,7 +112,7 @@ npm run dev
 - **Web 界面**: http://localhost:3060
 - **API 文档**: http://localhost:8208/docs
 
-#### 方式二：命令行工具
+#### 方式三：命令行工具（legacy）
 
 ```bash
 # 运行交互式命令行工具
