@@ -187,7 +187,7 @@ class ApiClient {
     return this.request('/api/config');
   }
 
-  async updateConfig(config: { cookie: string }) {
+  async updateConfig(config: { cookie: string; user_agent?: string }) {
     return this.request('/api/config', {
       method: 'POST',
       body: JSON.stringify(config),

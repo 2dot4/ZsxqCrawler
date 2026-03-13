@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import os
-from typing import Dict, Any
+import shutil
+from typing import Dict, Any, Optional
 
 class DatabasePathManager:
     """数据库路径管理器 - 统一管理所有数据库文件的存储位置"""
@@ -171,7 +172,7 @@ class DatabasePathManager:
         """清理空的群组目录"""
         if not os.path.exists(self.base_dir):
             return
-        
+
         for item in os.listdir(self.base_dir):
             item_path = os.path.join(self.base_dir, item)
             if os.path.isdir(item_path) and item.isdigit():  # 群组ID目录
@@ -185,3 +186,24 @@ db_path_manager = DatabasePathManager()
 def get_db_path_manager() -> DatabasePathManager:
     """获取数据库路径管理器实例"""
     return db_path_manager
+
+
+def get_root_download_dir() -> str:
+    """返回项目根目录下的 download 目录路径（若不存在则创建）"""
+    project_root = os.path.abspath(os.path.dirname(__file__))
+    root_download_dir = os.path.join(project_root, "download")
+    os.makedirs(root_download_dir, exist_ok=True)
+    return root_download_dir
+
+
+def mirror_file_to_root_downloads(source_path: str, filename: Optional[str] = None) -> Optional[str]:
+    """将已下载文件复制一份到根目录 download 目录"""
+    if not source_path or not os.path.isfile(source_path):
+        return None
+
+    target_dir = get_root_download_dir()
+    target_name = filename or os.path.basename(source_path)
+    dest_path = os.path.join(target_dir, target_name)
+
+    shutil.copy2(source_path, dest_path)
+    return dest_path

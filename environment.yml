@@ -1,0 +1,15 @@
+name: craw4jiucai
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - requests>=2.28.0
+      - tomli>=2.0.0
+      - fastapi>=0.104.0
+      - uvicorn>=0.24.0
+      - pydantic>=2.0.0
+      - loguru>=0.7.0
+      - uv

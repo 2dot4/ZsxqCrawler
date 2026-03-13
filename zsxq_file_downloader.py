@@ -16,6 +16,7 @@ from typing import Dict, Optional, Any
 
 import requests
 
+from db_path_manager import mirror_file_to_root_downloads
 from zsxq_file_database import ZSXQFileDatabase
 
 
@@ -26,7 +27,7 @@ class ZSXQFileDownloader:
                  download_interval: float = 1.0, long_sleep_interval: float = 60.0,
                  files_per_batch: int = 10, download_interval_min: float = None,
                  download_interval_max: float = None, long_sleep_interval_min: float = None,
-                 long_sleep_interval_max: float = None):
+                 long_sleep_interval_max: float = None, default_user_agent: Optional[str] = None):
         """
         初始化文件下载器
 
@@ -45,6 +46,7 @@ class ZSXQFileDownloader:
         """
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
+        self.default_user_agent = default_user_agent
 
         # 下载间隔控制参数
         self.download_interval = download_interval
@@ -203,8 +205,8 @@ class ZSXQFileDownloader:
             "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0"
         ]
         
-        # 随机选择User-Agent
-        selected_ua = random.choice(user_agents)
+        # 随机选择User-Agent（如配置了全局UA则优先使用）
+        selected_ua = self.default_user_agent or random.choice(user_agents)
         
         # 根据User-Agent生成对应的Sec-Ch-Ua
         if "Chrome" in selected_ua:
@@ -216,6 +218,8 @@ class ZSXQFileDownloader:
                 sec_ch_ua = '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"'
             else:
                 sec_ch_ua = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+        elif "Firefox" in selected_ua:
+            sec_ch_ua = '"Not_A Brand";v="99", "Chromium";v="120", "Google Chrome";v="120"'
         else:
             sec_ch_ua = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
         
@@ -521,7 +525,7 @@ class ZSXQFileDownloader:
         
         print(f"   🚫 已重试{max_retries}次，全部失败")
         return None
-    
+
     def download_file(self, file_info: Dict[str, Any]) -> bool:
         """下载单个文件"""
         file_data = file_info.get('file', {})
@@ -551,6 +555,12 @@ class ZSXQFileDownloader:
         if os.path.exists(file_path):
             existing_size = os.path.getsize(file_path)
             if existing_size == file_size:
+                try:
+                    mirrored_path = mirror_file_to_root_downloads(file_path, safe_filename)
+                    if mirrored_path:
+                        self.log(f"   📂 已同步到根目录: {mirrored_path}")
+                except Exception as mirror_err:
+                    self.log(f"   ⚠️ 同步到根目录失败: {mirror_err}")
                 self.log(f"   ✅ 文件已存在且大小匹配，跳过下载")
                 return "skipped"  # 返回特殊值表示跳过
             else:
@@ -616,6 +626,13 @@ class ZSXQFileDownloader:
 
                 self.log(f"   ✅ 下载完成: {safe_filename}")
                 self.log(f"   💾 保存路径: {file_path}")
+
+                try:
+                    mirrored_path = mirror_file_to_root_downloads(file_path, safe_filename)
+                    if mirrored_path:
+                        self.log(f"   📂 已同步到根目录: {mirrored_path}")
+                except Exception as mirror_err:
+                    self.log(f"   ⚠️ 同步到根目录失败: {mirror_err}")
 
                 self.download_count += 1
                 self.current_batch_count += 1

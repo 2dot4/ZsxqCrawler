@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 import time
+from user_agent_config import get_configured_user_agent
 
 
 class ImageCacheManager:
@@ -37,8 +38,10 @@ class ImageCacheManager:
         }
         
         # 默认请求头
+        configured_ua = get_configured_user_agent()
+
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': configured_ua or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': 'https://wx.zsxq.com/',
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',

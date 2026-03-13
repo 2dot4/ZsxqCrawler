@@ -44,6 +44,20 @@
 
 ### 1. 安装部署
 
+#### 方式A：使用 conda（Python 3.10，环境名 `craw4jiucai`）
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/2977094657/ZsxqCrawler.git
+cd ZsxqCrawler
+
+# 2. 创建并激活环境
+conda env create -f environment.yml
+conda activate craw4jiucai
+```
+
+#### 方式B：使用 uv/其他环境管理器
+
 ```bash
 # 1. 克隆项目
 git clone https://github.com/2977094657/ZsxqCrawler.git
@@ -99,6 +113,19 @@ output/
 
 #### 方式二：Web 界面（legacy）
 
+##### 使用 conda 环境一键启动（无需 uv）
+
+```bash
+# 已通过 environment.yml 创建好 conda 环境后，直接运行：
+bash start_web_conda.sh                # 默认使用 craw4jiucai 环境
+# 或指定其他环境名
+bash start_web_conda.sh my_env_name
+```
+
+脚本会同时启动后端（`conda run -n <env> python main.py --port 8208`）与前端（`npm run dev`，端口 3060），按下 `Ctrl+C` 即可同时停止两端服务。
+
+##### 使用 uv/其他方式
+
 ```bash
 # 1. 启动后端API服务
 uv run main.py
@@ -130,15 +157,14 @@ uv run zsxq_interactive_crawler.py
 
 - **话题 / 文章内容数据库**: `output/databases/{group_id}/zsxq_topics_{group_id}.db`  
   - 保存所有话题、文章正文、评论等结构化数据（Web 界面展示内容都来自这里）。
-- **文件列表数据库**: `output/databases/{group_id}/zsxq_files_{group_id}.db`  
+- **文件列表数据库**: `output/databases/{group_id}/zsxq_files_{group_id}.db`
   - 保存文件元数据（文件名、大小、下载次数等），用于文件面板和下载任务管理。
-- **已下载附件 / 文件**: `output/databases/{group_id}/downloads/`  
-  - 通过 Web 界面或命令行触发的文件下载，实际都会保存在这里。  
+- **已下载附件 / 文件**: `output/databases/{group_id}/downloads/`
+  - 通过 Web 界面或命令行触发的文件下载，实际都会保存在这里。
   - 例如当前示例配置中，群组 `88851415151812` 的文件路径为：`output/databases/88851415151812/downloads/`。
-- **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`  
+- **图片缓存（可安全删除）**: `output/databases/{group_id}/images/`
   - 用于话题图片预览的本地缓存，如被删除，后续访问时会自动重新生成。
-
-> 提示：当前版本不会将文章导出为 Markdown/HTML 文件，**文章内容都存储在话题数据库中**；若需要再导出为文件，可以后续通过数据库二次处理实现。
+- **Markdown 归档**: 每次爬取任务完成后，会在项目根目录 `doc/` 下生成以日期时间命名的 Markdown 汇总文件（示例：`20250101_153045.md`），包含该群组的话题正文，便于离线浏览。
 
 ## 贡献指南
 

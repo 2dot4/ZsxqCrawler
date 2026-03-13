@@ -6,7 +6,7 @@
 import os
 import sys
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 from contextlib import asynccontextmanager
 import json
@@ -21,16 +21,18 @@ import mimetypes
 import random
 import time
 
+from user_agent_config import get_configured_user_agent
+
 # 添加项目根目录到Python路径（现在main.py就在根目录）
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
 # 导入现有的业务逻辑模块
-from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config
+from zsxq_interactive_crawler import ZSXQInteractiveCrawler, load_config as load_config_from_file
 from zsxq_database import ZSXQDatabase
 from zsxq_file_database import ZSXQFileDatabase
-from db_path_manager import get_db_path_manager
+from db_path_manager import get_db_path_manager, mirror_file_to_root_downloads
 from image_cache_manager import get_image_cache_manager
 from accounts_manager import (
     get_accounts as am_get_accounts,
@@ -49,6 +51,25 @@ from logger_config import log_info, log_warning, log_error, log_exception, log_d
 
 # 初始化日志系统
 ensure_configured()
+
+# 配置缓存，启动时即刻加载 config.toml，便于重启后恢复状态
+CONFIG_CACHE: Optional[dict] = None
+CONFIGURED_USER_AGENT: Optional[str] = None
+
+
+def load_config(refresh: bool = False) -> Optional[dict]:
+    """包装原始配置加载逻辑，支持缓存与刷新。"""
+
+    global CONFIG_CACHE, CONFIGURED_USER_AGENT
+
+    if refresh or CONFIG_CACHE is None:
+        CONFIG_CACHE = load_config_from_file()
+        CONFIGURED_USER_AGENT = get_configured_user_agent(CONFIG_CACHE)
+    return CONFIG_CACHE
+
+
+# 启动时尝试加载配置，确保重启后立即可用
+load_config(refresh=True)
 
 
 @asynccontextmanager
@@ -199,6 +220,9 @@ def get_cached_local_group_ids(force_refresh: bool = False) -> set:
 # Pydantic模型定义
 class ConfigModel(BaseModel):
     cookie: str = Field(..., description="知识星球Cookie")
+    user_agent: Optional[str] = Field(
+        default=None, description="可选的全局 User-Agent（为空则使用随机池）"
+    )
 
 class CrawlHistoricalRequest(BaseModel):
     pages: int = Field(default=10, ge=1, le=1000, description="爬取页数")
@@ -285,7 +309,13 @@ def get_crawler(log_callback=None) -> ZSXQInteractiveCrawler:
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler_instance = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler_instance = ZSXQInteractiveCrawler(
+            cookie,
+            group_id,
+            db_path,
+            log_callback,
+            default_user_agent=CONFIGURED_USER_AGENT,
+        )
 
     return crawler_instance
 
@@ -305,7 +335,13 @@ def get_crawler_for_group(group_id: str, log_callback=None) -> ZSXQInteractiveCr
     path_manager = get_db_path_manager()
     db_path = path_manager.get_topics_db_path(group_id)
 
-    return ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+    return ZSXQInteractiveCrawler(
+        cookie,
+        group_id,
+        db_path,
+        log_callback,
+        default_user_agent=CONFIGURED_USER_AGENT,
+    )
 
 def get_crawler_safe() -> Optional[ZSXQInteractiveCrawler]:
     """安全获取爬虫实例，配置未设置时返回None"""
@@ -389,6 +425,164 @@ def broadcast_log(task_id: str, log_message: str):
     # 这个函数现在主要用于存储日志，实际的SSE广播在stream端点中实现
     pass
 
+
+def export_group_markdown(
+    group_id: str,
+    db: Optional[ZSXQDatabase] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+) -> Optional[str]:
+    """根据数据库内容生成当前群组的话题 Markdown 归档文件。
+
+    Args:
+        group_id: 群组ID。
+        db: 可选的现有数据库实例；未提供时会自行打开并在结束后关闭。
+        log_callback: 可选的日志回调，用于任务日志输出。
+
+    Returns:
+        生成的 Markdown 文件相对路径（相对于项目根目录），失败时返回 None。
+    """
+
+    def _log(message: str):
+        if log_callback:
+            log_callback(message)
+
+    local_db = db
+    close_after = False
+
+    try:
+        path_manager = get_db_path_manager()
+        doc_dir = os.path.join(project_root, "doc")
+        os.makedirs(doc_dir, exist_ok=True)
+
+        if local_db is None:
+            db_path = path_manager.get_topics_db_path(group_id)
+            if not os.path.exists(db_path):
+                _log(f"⚠️ 未找到群组 {group_id} 的数据库，跳过生成 Markdown")
+                return None
+            local_db = ZSXQDatabase(db_path)
+            close_after = True
+
+        cursor = local_db.cursor
+        cursor.execute(
+            "SELECT name FROM groups WHERE group_id = ? LIMIT 1",
+            (group_id,),
+        )
+        group_row = cursor.fetchone()
+        group_name = (group_row[0] if group_row else None) or f"群组 {group_id}"
+
+        cursor.execute(
+            """
+            SELECT
+                t.topic_id,
+                t.title,
+                t.type,
+                t.create_time,
+                t.likes_count,
+                t.comments_count,
+                t.reading_count,
+                tk.text AS talk_text,
+                u.name AS author_name,
+                u.alias AS author_alias,
+                art.title AS article_title,
+                art.article_url AS article_url,
+                q.text AS question_text,
+                a.text AS answer_text
+            FROM topics t
+            LEFT JOIN talks tk ON t.topic_id = tk.topic_id
+            LEFT JOIN users u ON tk.owner_user_id = u.user_id
+            LEFT JOIN articles art ON t.topic_id = art.topic_id
+            LEFT JOIN questions q ON t.topic_id = q.topic_id
+            LEFT JOIN answers a ON t.topic_id = a.topic_id
+            WHERE t.group_id = ?
+            ORDER BY t.create_time DESC
+            """,
+            (group_id,),
+        )
+
+        rows = cursor.fetchall()
+        if not rows:
+            _log(f"⚠️ 群组 {group_id} 暂无话题数据，未生成 Markdown")
+            return None
+
+        timestamp_label = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp_label}.md"
+        filepath = os.path.join(doc_dir, filename)
+
+        lines = [
+            f"# {group_name} 文章归档", "",
+            f"- 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"- 群组 ID: {group_id}",
+            f"- 话题总数: {len(rows)}",
+            "",
+        ]
+
+        for idx, topic in enumerate(rows, start=1):
+            (
+                topic_id,
+                title,
+                topic_type,
+                create_time,
+                likes_count,
+                comments_count,
+                reading_count,
+                talk_text,
+                author_name,
+                author_alias,
+                article_title,
+                article_url,
+                question_text,
+                answer_text,
+            ) = topic
+
+            display_title = title or article_title or f"话题 {topic_id}"
+            author_display = author_alias or author_name or ""
+
+            lines.append(f"## {idx}. {display_title}")
+            meta_parts = [
+                f"ID: {topic_id}",
+                f"类型: {topic_type or 'unknown'}",
+                f"创建时间: {create_time or '未知'}",
+            ]
+            if author_display:
+                meta_parts.append(f"作者: {author_display}")
+            meta_parts.append(
+                f"互动: 👍 {likes_count or 0} · 💬 {comments_count or 0} · 👀 {reading_count or 0}"
+            )
+            lines.append("; ".join(meta_parts))
+
+            if article_url:
+                lines.append(f"[文章链接]({article_url})")
+
+            content_blocks: List[str] = []
+            if talk_text and talk_text.strip():
+                content_blocks.append(talk_text.strip())
+            if question_text and question_text.strip():
+                content_blocks.append(f"**提问：** {question_text.strip()}")
+            if answer_text and answer_text.strip():
+                content_blocks.append(f"**回答：** {answer_text.strip()}")
+
+            if not content_blocks:
+                content_blocks.append("_暂无正文_")
+
+            lines.append("\n\n".join(content_blocks))
+            lines.append("")  # 空行分隔
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        relative_path = os.path.relpath(filepath, project_root)
+        _log(f"📝 已生成 Markdown 归档: {relative_path}")
+        return relative_path
+    except Exception as e:
+        _log(f"⚠️ 生成 Markdown 失败: {e}")
+        return None
+    finally:
+        if close_after and local_db:
+            try:
+                local_db.close()
+            except Exception:
+                pass
+
 def build_stealth_headers(cookie: str) -> Dict[str, str]:
     """构造更接近官网的请求头，提升成功率"""
     user_agents = [
@@ -399,6 +593,8 @@ def build_stealth_headers(cookie: str) -> Dict[str, str]:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     ]
+    selected_ua = CONFIGURED_USER_AGENT or random.choice(user_agents)
+
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -415,7 +611,7 @@ def build_stealth_headers(cookie: str) -> Dict[str, str]:
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "User-Agent": random.choice(user_agents),
+        "User-Agent": selected_ua,
         "X-Aduid": "a3be07cd6-dd67-3912-0093-862d844e7fe",
         "X-Request-Id": f"dcc5cb6ab-1bc3-8273-cc26-{random.randint(100000000000, 999999999999)}",
         "X-Signature": "733fd672ddf6d4e367730d9622cdd1e28a4b6203",
@@ -507,6 +703,9 @@ async def get_config():
 async def update_config(config: ConfigModel):
     """更新配置"""
     try:
+        user_agent = (config.user_agent or "").strip()
+        sanitized_ua = user_agent.replace("\"", "\\\"") if user_agent else ""
+
         # 创建配置内容
         config_content = f"""# 知识星球数据采集器配置文件
 # 通过Web界面自动生成
@@ -520,6 +719,9 @@ cookie = "{config.cookie}"
 dir = "downloads"
 """
 
+        if sanitized_ua:
+            config_content += f"\n\n[network]\n# 全局默认 User-Agent（为空则使用内置随机池）\nuser_agent = \"{sanitized_ua}\""
+
         # 保存配置文件
         config_path = "config.toml"
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -528,6 +730,9 @@ dir = "downloads"
         # 重置爬虫实例，强制重新加载配置
         global crawler_instance
         crawler_instance = None
+
+        # 刷新全局配置缓存与 User-Agent 配置
+        load_config(refresh=True)
 
         return {"message": "配置更新成功", "success": True}
     except Exception as e:
@@ -959,7 +1164,13 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler = ZSXQInteractiveCrawler(
+            cookie,
+            group_id,
+            db_path,
+            log_callback,
+            default_user_agent=CONFIGURED_USER_AGENT,
+        )
         # 设置停止检查函数
         crawler.stop_check_func = stop_check
 
@@ -996,6 +1207,11 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
             add_task_log(task_id, f"❌ 会员已过期: {result.get('message', '成员体验已到期')}")
             update_task(task_id, "failed", "会员已过期", {"expired": True, "code": result.get('code'), "message": result.get('message')})
             return
+
+        markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+        if markdown_path:
+            result = result or {}
+            result["markdown_path"] = markdown_path
 
         add_task_log(task_id, f"✅ 获取完成！新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}")
         update_task(task_id, "completed", "历史数据爬取完成", result)
@@ -1526,7 +1742,13 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(
+                    cookie,
+                    group_id,
+                    db_path,
+                    log_callback,
+                    default_user_agent=CONFIGURED_USER_AGENT,
+                )
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1573,6 +1795,11 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                     update_task(task_id, "failed", "会员已过期", {"expired": True, "code": result.get('code'), "message": result.get('message')})
                     return
 
+                markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+                if markdown_path:
+                    result = result or {}
+                    result["markdown_path"] = markdown_path
+
                 add_task_log(task_id, f"🎉 全量爬取完成！")
                 add_task_log(task_id, f"📊 最终统计: 新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}, 总页数: {result.get('pages', 0)}")
                 update_task(task_id, "completed", "全量爬取完成", result)
@@ -1614,7 +1841,13 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(
+                    cookie,
+                    group_id,
+                    db_path,
+                    log_callback,
+                    default_user_agent=CONFIGURED_USER_AGENT,
+                )
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1641,6 +1874,11 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 # 检查任务是否被停止
                 if is_task_stopped(task_id):
                     return
+
+                markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+                if markdown_path:
+                    result = result or {}
+                    result["markdown_path"] = markdown_path
 
                 add_task_log(task_id, f"✅ 增量爬取完成！新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}")
                 update_task(task_id, "completed", "增量爬取完成", result)
@@ -1683,7 +1921,13 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(
+                    cookie,
+                    group_id,
+                    db_path,
+                    log_callback,
+                    default_user_agent=CONFIGURED_USER_AGENT,
+                )
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1716,6 +1960,11 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                     add_task_log(task_id, f"❌ 会员已过期: {result.get('message', '成员体验已到期')}")
                     update_task(task_id, "failed", "会员已过期", {"expired": True, "code": result.get('code'), "message": result.get('message')})
                     return
+
+                markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+                if markdown_path:
+                    result = result or {}
+                    result["markdown_path"] = markdown_path
 
                 add_task_log(task_id, f"✅ 获取最新记录完成！新增话题: {result.get('new_topics', 0)}, 更新话题: {result.get('updated_topics', 0)}")
                 update_task(task_id, "completed", "获取最新记录完成", result)
@@ -3780,7 +4029,13 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler = ZSXQInteractiveCrawler(
+            cookie,
+            group_id,
+            db_path,
+            log_callback,
+            default_user_agent=CONFIGURED_USER_AGENT,
+        )
         crawler.stop_check_func = stop_check
 
         # 可选：应用自定义间隔设置
@@ -3894,6 +4149,10 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
             # 结束条件：没有下一页时间或已越过起始边界
             if not end_time_param or (last_time_dt_in_page and last_time_dt_in_page < start_dt):
                 break
+
+        markdown_path = export_group_markdown(group_id, crawler.db, lambda msg: add_task_log(task_id, msg))
+        if markdown_path:
+            total_stats["markdown_path"] = markdown_path
 
         update_task(task_id, "completed", "时间区间爬取完成", total_stats)
     except Exception as e:
@@ -4600,6 +4859,13 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
         existing_size = os.path.getsize(local_path)
         if existing_size == file_size or (file_size == 0 and existing_size > 0):
             db.update_file_download_status(file_id, 'completed', local_path)
+            try:
+                mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                if mirror_path and task_id:
+                    add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+            except Exception as mirror_err:
+                if task_id:
+                    add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
             if task_id:
                 add_task_log(task_id, f"         ⏭️ 文件已存在，跳过下载 ({existing_size/(1024*1024):.2f}MB)")
             return "skipped"
@@ -4669,8 +4935,15 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
                     for chunk in file_resp.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
-                
+
                 db.update_file_download_status(file_id, 'completed', local_path)
+                try:
+                    mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                    if mirror_path and task_id:
+                        add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+                except Exception as mirror_err:
+                    if task_id:
+                        add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
                 return "downloaded"
             else:
                 last_error = f"HTTP {file_resp.status_code}"
@@ -4718,6 +4991,13 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
         existing_size = os.path.getsize(local_path)
         if existing_size > 0:
             db.update_video_download_status(video_id, 'completed', '', local_path)
+            try:
+                mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                if mirror_path and task_id:
+                    add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+            except Exception as mirror_err:
+                if task_id:
+                    add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
             if task_id:
                 add_task_log(task_id, f"         ⏭️ 视频已存在，跳过下载 ({existing_size/(1024*1024):.1f}MB)")
             return "skipped"
@@ -4909,6 +5189,13 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
             db.update_video_download_status(video_id, 'completed', m3u8_url, local_path)
             final_size = os.path.getsize(local_path)
             log_info(f"视频下载成功: video_id={video_id}, path={local_path}, size={final_size}")
+            try:
+                mirror_path = mirror_file_to_root_downloads(local_path, os.path.basename(local_path))
+                if mirror_path and task_id:
+                    add_task_log(task_id, f"         📂 已同步到根目录: {mirror_path}")
+            except Exception as mirror_err:
+                if task_id:
+                    add_task_log(task_id, f"         ⚠️ 同步到根目录失败: {mirror_err}")
             if task_id:
                 add_task_log(task_id, f"         ✅ 视频下载完成 ({final_size/(1024*1024):.1f}MB)")
             return "downloaded"
